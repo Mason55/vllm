@@ -1,0 +1,9 @@
+prefix_queries=196524
+prefix_hits=23168
+prefix_hit_rate=11.79%
+external_queries=173356
+external_hits=42336
+external_hit_rate=24.42%
+local_cache_hit_tokens=23168
+external_kv_transfer_tokens=42336
+prompt_tokens_cached=65504

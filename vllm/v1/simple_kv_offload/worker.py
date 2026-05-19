@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 import torch
 
 from vllm.config import VllmConfig
+from vllm.distributed.kv_transfer.kv_connector.v1.offloading.metrics import (
+    OffloadingConnectorStats,
+)
 from vllm.logger import init_logger
 from vllm.utils.platform_utils import is_pin_memory_available
 from vllm.v1.simple_kv_offload.copy_backend import DmaCopyBackend
@@ -62,6 +65,8 @@ class SimpleCPUOffloadWorker:
         self._pending_store_event_indices: set[int] = set()
         # Completed store events to report via build_connector_worker_meta
         self._completed_store_events: dict[int, int] = {}
+        self.bytes_per_block: int = 0
+        self.kv_connector_stats = OffloadingConnectorStats()
 
     def register_kv_caches(
         self,
@@ -138,6 +143,7 @@ class SimpleCPUOffloadWorker:
             t.stride(0) * t.element_size() for t in unique_gpu_caches.values()
         ]
         total_bytes_per_block = sum(per_tensor_bpb)
+        self.bytes_per_block = total_bytes_per_block
 
         self.num_cpu_blocks = max(1, self.cpu_capacity_bytes // total_bytes_per_block)
 
@@ -220,6 +226,11 @@ class SimpleCPUOffloadWorker:
         if metadata is not None:
             # Launch loads (CPU->GPU).
             if metadata.load_cpu_blocks:
+                self.kv_connector_stats.record_transfer(
+                    num_bytes=len(metadata.load_cpu_blocks) * self.bytes_per_block,
+                    time=0.0,
+                    transfer_type=("cpu", "gpu"),
+                )
                 self._backend.launch_copy(
                     metadata.load_cpu_blocks,
                     metadata.load_gpu_blocks,
@@ -229,6 +240,11 @@ class SimpleCPUOffloadWorker:
                 )
             # Launch stores (GPU->CPU).
             if metadata.store_gpu_blocks:
+                self.kv_connector_stats.record_transfer(
+                    num_bytes=len(metadata.store_gpu_blocks) * self.bytes_per_block,
+                    time=0.0,
+                    transfer_type=("gpu", "cpu"),
+                )
                 self._backend.launch_copy(
                     metadata.store_gpu_blocks,
                     metadata.store_cpu_blocks,
@@ -275,6 +291,13 @@ class SimpleCPUOffloadWorker:
         if not kv_connector_metadata.need_flush:
             return
         self._flush_and_sync_all()
+
+    def get_kv_connector_stats(self):
+        if self.kv_connector_stats.is_empty():
+            return None
+        kv_connector_stats = self.kv_connector_stats
+        self.kv_connector_stats = OffloadingConnectorStats()
+        return kv_connector_stats
 
     def _flush_and_sync_all(self) -> None:
         """Synchronize all in-flight transfer events."""
