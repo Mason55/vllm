@@ -1,0 +1,24 @@
+[h2d] total_bytes=234881024 (224.00 MiB) layers=28 blocks=256 bpb=32768 pattern=contiguous
+A contiguous  stream_us=19036.22 gbps=11.49
+C batched     stream_us=23887.47 gbps=9.16
+ratio C/A     stream=1.25x gbps=0.80x
+[h2d] total_bytes=234881024 (224.00 MiB) layers=28 blocks=256 bpb=32768 pattern=runs
+A contiguous  stream_us=19043.38 gbps=11.49
+C batched     stream_us=23886.00 gbps=9.16
+ratio C/A     stream=1.25x gbps=0.80x
+[h2d] total_bytes=234881024 (224.00 MiB) layers=28 blocks=256 bpb=32768 pattern=random
+A contiguous  stream_us=19034.85 gbps=11.49
+C batched     stream_us=24979.86 gbps=8.76
+ratio C/A     stream=1.31x gbps=0.76x
+[d2h] total_bytes=234881024 (224.00 MiB) layers=28 blocks=256 bpb=32768 pattern=contiguous
+A contiguous  stream_us=17822.18 gbps=12.27
+C batched     stream_us=23531.97 gbps=9.30
+ratio C/A     stream=1.32x gbps=0.76x
+[d2h] total_bytes=234881024 (224.00 MiB) layers=28 blocks=256 bpb=32768 pattern=runs
+A contiguous  stream_us=17821.84 gbps=12.27
+C batched     stream_us=23511.42 gbps=9.30
+ratio C/A     stream=1.32x gbps=0.76x
+[d2h] total_bytes=234881024 (224.00 MiB) layers=28 blocks=256 bpb=32768 pattern=random
+A contiguous  stream_us=17825.65 gbps=12.27
+C batched     stream_us=23505.17 gbps=9.31
+ratio C/A     stream=1.32x gbps=0.76x

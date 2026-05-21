@@ -1,0 +1,8 @@
+[h2d] total_bytes=603979776 (576.00 MiB) layers=36 blocks=32 bpb=524288 pattern=random
+A contiguous  stream_us=48951.68 gbps=11.49
+C batched     stream_us=49811.41 gbps=11.29
+ratio C/A     stream=1.02x gbps=0.98x
+[d2h] total_bytes=603979776 (576.00 MiB) layers=36 blocks=32 bpb=524288 pattern=random
+A contiguous  stream_us=45816.21 gbps=12.28
+C batched     stream_us=46667.23 gbps=12.05
+ratio C/A     stream=1.02x gbps=0.98x
