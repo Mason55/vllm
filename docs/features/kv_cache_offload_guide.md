@@ -6,14 +6,15 @@
 
 ---
 
-## 1. 两套实现，怎么选？
+## 1. 三类实现，怎么选？
 
-vLLM 在 `v0.21` 提供两条 **CPU KV offload** 路径，都通过 **KV Connector** 接入调度器：
+vLLM 在 `v0.21` 提供几类 **KV offload / transfer** 路径，都通过 **KV Connector** 接入调度器：
 
 | 路径 | Connector 名 | 特点 | 推荐场景 |
 |------|--------------|------|----------|
 | **Simple（新）** | `SimpleCPUOffloadConnector` | 复用 GPU `BlockPool` 做 CPU prefix cache；`cuMemcpyBatchAsync` 批量拷贝；实现集中 | 单机 CPU offload，追求吞吐 |
 | **通用框架** | `OffloadingConnector` | `OffloadingManager` 抽象；LRU/ARC 可插拔；可扩展 Mooncake 等 | 需要 ARC、store 过滤、多级介质 |
+| **LMCache** | `LMCacheConnectorV1` | token chunk hash；CPU/disk/remote 分层；async loading；layerwise transfer；retrieve threshold | 最快接入工程化 KV reuse/offload；需要异步 reload、逐层流水或多实例共享 |
 
 ```mermaid
 flowchart TB
@@ -37,6 +38,7 @@ flowchart TB
     B --> H["直接指定 kv_connector"]
     H --> E
     H --> F
+    H --> G
 ```
 
 > **注意**：`--cpu-offload-gb` 是 **模型权重** offload，与 KV cache offload **无关**。
@@ -68,7 +70,7 @@ export VLLM_USE_SIMPLE_KV_OFFLOAD=1
 vllm serve <model> --kv-offloading-size 32 --kv-offloading-backend native
 ```
 
-### 2.2 方式 B：显式 KV Transfer Config
+### 2.2 方式 B：显式 KV Transfer Config（Simple / Native）
 
 ```bash
 vllm serve <model> \
@@ -101,12 +103,67 @@ vllm serve <model> \
 | `store_threshold` | `0` | ≥2 时：块被 lookup 够 N 次才允许 store（减少无效下盘） |
 | `block_size` | GPU block | offload 块 = N × GPU block |
 
-### 2.3 前置条件检查清单
+### 2.3 方式 C：LMCacheConnectorV1
+
+LMCache 是当前最快落地的工程方案：vLLM 负责调度与执行，LMCache 负责 chunk hash、分层存储、async lookup/retrieve、layerwise store/retrieve 等。
+
+最小 CPU offload 配置：
+
+```yaml
+# lmcache_config.yaml
+chunk_size: 256
+local_cpu: true
+max_local_cpu_size: 100
+```
+
+```bash
+LMCACHE_CONFIG_FILE=lmcache_config.yaml \
+vllm serve <model> \
+  --enable-prefix-caching \
+  --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'
+```
+
+带 reload 加速的实验配置：
+
+```yaml
+# lmcache_config.yaml
+chunk_size: 256
+local_cpu: true
+max_local_cpu_size: 100
+enable_async_loading: true
+min_retrieve_tokens: 1024
+use_layerwise: true
+```
+
+也可用顶层参数接入本机 CPU LMCache：
+
+```bash
+vllm serve <model> \
+  --enable-prefix-caching \
+  --kv-offloading-size 32 \
+  --kv-offloading-backend lmcache
+```
+
+但顶层参数只自动设置 `lmcache.local_cpu=true` 与 `lmcache.max_local_cpu_size=<per-rank GiB>`；`enable_async_loading`、`min_retrieve_tokens`、`use_layerwise` 等仍建议放在 `LMCACHE_CONFIG_FILE` 中。
+
+关键 knobs：
+
+| 参数 | 作用 | 经验起点 |
+|------|------|----------|
+| `chunk_size` | LMCache chunk 粒度；影响 lookup 数量与搬运批大小 | `256` |
+| `enable_async_loading` | scheduler 先做 chunk hash lookup，worker 侧异步 retrieve；命中后预取，减少同步阻塞 | `true` |
+| `min_retrieve_tokens` | 命中 token 数低于阈值时跳过 retrieve，直接 recompute | `1024` 起扫 |
+| `use_layerwise` | 按 layer retrieve/store，把「整段 KV 全部 load 完」改成逐层流水 | `true` |
+
+> 注意：`use_layerwise=true` 会引入 layerwise 异步同步点，vLLM 需要 PIECEWISE CUDA graph 或 eager。若通过 `kv_connector_extra_config` 而不是 `LMCACHE_CONFIG_FILE` 设置 layerwise，当前代码里还应带上未加前缀的 `"use_layerwise": true`，以触发 `LMCacheConnectorV1.requires_piecewise_for_cudagraph()`。
+
+### 2.4 前置条件检查清单
 
 - [ ] `enable_prefix_caching=True`（Simple 路径未开启会 **自动禁用** offload）
 - [ ] `kv_offloading_size` 或 `kv_transfer_config` 已配置
 - [ ] Simple 路径：CUDA driver 支持 `cuMemcpyBatchAsync`（较新驱动）；ROCm 需 7.1+
 - [ ] TP/PP > 1 时：store 完成需 **所有 rank** 上报后才对 scheduler 可见
+- [ ] LMCache 路径：`LMCACHE_CONFIG_FILE` 可读；`enable_async_loading` / `use_layerwise` 与 benchmark 目标一致
 
 ---
 
@@ -375,6 +432,40 @@ stateDiagram-v2
 | load 启动 | forward **后** | `start_load_kv()` 在 forward **前** |
 | store 启动 | forward **后** | `wait_for_save()` 在 forward **后** |
 | 淘汰 | BlockPool LRU | LRU / ARC + 可选 `store_threshold` 过滤 |
+
+### 5.4 LMCache 路径的性能差异
+
+LMCache 的核心目标不是只把 KV 放到 CPU，而是把 **lookup / retrieve / store** 变成可流水的工程链路：
+
+| 机制 | 作用 | 对 reload latency 的影响 |
+|------|------|--------------------------|
+| token chunk hash lookup | 按 chunk 查命中，不要求整段 prompt 全命中 | 允许部分命中与批量 contains/get |
+| `enable_async_loading` | scheduler 发起 lookup，worker 侧 async lookup server 与 non-blocking retrieve 并行 | reload 不再完全阻塞调度线程；miss 快速返回 |
+| `use_layerwise` | `retrieve_layer()` / `store_layer()` 逐层推进 | layer 0 KV ready 后可先算 layer 0，同时 load 后续 layer |
+| `min_retrieve_tokens` | 小命中跳过 retrieve | 避免固定开销、Python 开销、PCIe 小包开销超过 recompute 收益 |
+| CPU/disk/remote tier | 本地 CPU、磁盘、远端 KV backend 分层 | 单机先测 CPU；多实例再测 remote / P2P |
+
+粗略决策公式：
+
+```text
+T_load = T_fixed + KV_bytes / BW_eff + T_deserialize
+T_recompute = N_tokens * T_prefill_per_token
+
+只有 T_load < T_recompute 时才 retrieve，否则 recompute。
+```
+
+这就是 `min_retrieve_tokens` / recompute threshold 的意义：KV offload 慢的常见原因不是大块搬运，而是大量小命中被同步 reload。
+
+Layerwise 的收益来自 latency hiding：
+
+```text
+传统：load all layers' KV -> forward
+逐层：load layer 0 -> compute layer 0
+     while compute layer 0, load layer 1
+     while compute layer 1, load layer 2
+```
+
+若实验目标是「CPU↔GPU reload 更快」，优先级应是：先开 LMCache + async loading，再测 layerwise，再扫 `min_retrieve_tokens`；只有多实例/多机共享时再优先看 NIXL / RDMA / P2P。
 
 ---
 

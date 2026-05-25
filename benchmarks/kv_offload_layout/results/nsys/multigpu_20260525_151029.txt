@@ -1,0 +1,30 @@
+[h2d][contiguous] exec=process run=concurrent-only pattern=contiguous gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5443.30 aggregate_gbps_p50=11.48
+  gpu=0 submit_us_p50=8.35 submit_us_p95=18.27 complete_us_p50=5420.18 gbps_p50=2.88
+  gpu=1 submit_us_p50=8.37 submit_us_p95=18.05 complete_us_p50=5421.19 gbps_p50=2.88
+  gpu=2 submit_us_p50=8.85 submit_us_p95=53.09 complete_us_p50=5423.26 gbps_p50=2.88
+  gpu=3 submit_us_p50=8.47 submit_us_p95=14.85 complete_us_p50=5422.01 gbps_p50=2.88
+[h2d][batched] exec=process run=concurrent-only pattern=random gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5737.32 aggregate_gbps_p50=10.89
+  gpu=0 submit_us_p50=289.46 submit_us_p95=318.44 complete_us_p50=5699.82 gbps_p50=2.74
+  gpu=1 submit_us_p50=333.44 submit_us_p95=379.71 complete_us_p50=5735.60 gbps_p50=2.72
+  gpu=2 submit_us_p50=294.60 submit_us_p95=323.34 complete_us_p50=5706.99 gbps_p50=2.74
+  gpu=3 submit_us_p50=292.97 submit_us_p95=326.99 complete_us_p50=5692.00 gbps_p50=2.75
+[d2h][contiguous] exec=process run=concurrent-only pattern=contiguous gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5114.23 aggregate_gbps_p50=12.22
+  gpu=0 submit_us_p50=15.91 submit_us_p95=19.79 complete_us_p50=5100.04 gbps_p50=3.06
+  gpu=1 submit_us_p50=8.24 submit_us_p95=12.52 complete_us_p50=5092.79 gbps_p50=3.07
+  gpu=2 submit_us_p50=10.18 submit_us_p95=13.52 complete_us_p50=5091.29 gbps_p50=3.07
+  gpu=3 submit_us_p50=17.23 submit_us_p95=28.36 complete_us_p50=5100.98 gbps_p50=3.06
+[d2h][batched] exec=process run=concurrent-only pattern=random gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5392.83 aggregate_gbps_p50=11.59
+  gpu=0 submit_us_p50=322.23 submit_us_p95=333.19 complete_us_p50=5388.99 gbps_p50=2.90
+  gpu=1 submit_us_p50=283.10 submit_us_p95=293.73 complete_us_p50=5343.52 gbps_p50=2.92
+  gpu=2 submit_us_p50=282.15 submit_us_p95=289.53 complete_us_p50=5334.52 gbps_p50=2.93
+  gpu=3 submit_us_p50=314.20 submit_us_p95=326.44 complete_us_p50=5380.68 gbps_p50=2.90
+json=benchmarks/kv_offload_layout/results/multigpu_4gpu_thread_concurrent.json
+Collecting data...
+Generating '/tmp/nsys-report-7784.qdstrm'
+[1/1] [0%                          ] multigpu_20260525_151029.nsys-rep[1/1] [0%                          ] multigpu_20260525_151029.nsys-rep[1/1] [5%                          ] multigpu_20260525_151029.nsys-rep[1/1] [6%                          ] multigpu_20260525_151029.nsys-rep[1/1] [7%                          ] multigpu_20260525_151029.nsys-rep[1/1] [8%                          ] multigpu_20260525_151029.nsys-rep[1/1] [9%                          ] multigpu_20260525_151029.nsys-rep[1/1] [10%                         ] multigpu_20260525_151029.nsys-rep[1/1] [11%                         ] multigpu_20260525_151029.nsys-rep[1/1] [12%                         ] multigpu_20260525_151029.nsys-rep[1/1] [6%                          ] multigpu_20260525_151029.nsys-rep[1/1] [7%                          ] multigpu_20260525_151029.nsys-rep[1/1] [8%                          ] multigpu_20260525_151029.nsys-rep[1/1] [5%                          ] multigpu_20260525_151029.nsys-rep[1/1] [0%                          ] multigpu_20260525_151029.nsys-rep[1/1] [5%                          ] multigpu_20260525_151029.nsys-rep[1/1] [7%                          ] multigpu_20260525_151029.nsys-rep[1/1] [9%                          ] multigpu_20260525_151029.nsys-rep[1/1] [11%                         ] multigpu_20260525_151029.nsys-rep[1/1] [12%                         ] multigpu_20260525_151029.nsys-rep[1/1] [14%                         ] multigpu_20260525_151029.nsys-rep[1/1] [=16%                        ] multigpu_20260525_151029.nsys-rep[1/1] [==18%                       ] multigpu_20260525_151029.nsys-rep[1/1] [==19%                       ] multigpu_20260525_151029.nsys-rep[1/1] [==21%                       ] multigpu_20260525_151029.nsys-rep[1/1] [===23%                      ] multigpu_20260525_151029.nsys-rep[1/1] [====25%                     ] multigpu_20260525_151029.nsys-rep[1/1] [====26%                     ] multigpu_20260525_151029.nsys-rep[1/1] [====28%                     ] multigpu_20260525_151029.nsys-rep[1/1] [=====30%                    ] multigpu_20260525_151029.nsys-rep[1/1] [=====32%                    ] multigpu_20260525_151029.nsys-rep[1/1] [======33%                   ] multigpu_20260525_151029.nsys-rep[1/1] [======35%                   ] multigpu_20260525_151029.nsys-rep[1/1] [=======37%                  ] multigpu_20260525_151029.nsys-rep[1/1] [=======38%                  ] multigpu_20260525_151029.nsys-rep[1/1] [========40%                 ] multigpu_20260525_151029.nsys-rep[1/1] [========42%                 ] multigpu_20260525_151029.nsys-rep[1/1] [=========43%                ] multigpu_20260525_151029.nsys-rep[1/1] [=========45%                ] multigpu_20260525_151029.nsys-rep[1/1] [=========46%                ] multigpu_20260525_151029.nsys-rep[1/1] [==========47%               ] multigpu_20260525_151029.nsys-rep[1/1] [==========49%               ] multigpu_20260525_151029.nsys-rep[1/1] [===========50%              ] multigpu_20260525_151029.nsys-rep[1/1] [========================100%] multigpu_20260525_151029.nsys-rep[1/1] [========================100%] multigpu_20260525_151029.nsys-rep
+Generated:
+	/data1/lmy/vllm/benchmarks/kv_offload_layout/results/nsys/multigpu_20260525_151029.nsys-rep

@@ -239,12 +239,84 @@ A0（无 `--kv-offloading-size`），同 S1 序列。E3 用于确认 baseline �
 | **T3 Backend / Store** | A1 Eager / A2 Native / **B1 Lazy** | S1；pool=24G；Lazy 时 E1 观测点改 T1 |
 | **T4 长度** | 32K / 64K /（可选 128K TP=2） | S1 序列；看 TTFT/load 字节随长度变化 |
 | **T5 共享 prefix（S2）** | K=2/4 租户 × 64K system | A1；测 load 并发 |
+| **T6 LMCache reload 加速** | async loading / layerwise / retrieve threshold | S1/CA2；作为 Appendix 或 v2 主线候选，不替代 CA2 exact-bytes 主表 |
 
 Lazy store（**仅 v1 T3**，v0 不用）：
 
 ```bash
 --kv-transfer-config '{"kv_connector_extra_config":{"lazy_offload":true}}'
 ```
+
+### 6.1 Mason 工程线：LMCache reload 加速实验
+
+Mason 的结论应进入实验文档，但不能打乱当前 Mainline：**CA2 + bidirectional exact bytes** 仍是 RFC 主表最小闭环；LMCache 先作为 reload 加速候选进入 Appendix / v2。
+
+优先级：
+
+```text
+1. LMCacheConnectorV1 基线：先确认 S1/CA2 下 store/load/reuse 信号
+2. enable_async_loading：同步 reload -> 异步 lookup + prefetch
+3. use_layerwise：整段 reload -> 按 layer 流水 load/compute
+4. min_retrieve_tokens：小命中直接 recompute
+5. pinned CPU + CUDA stream + double buffer：若继续改实现，再看本地 DMA
+6. NIXL / RDMA / P2P：多实例、多机、多 GPU 共享时再升优先级
+7. KV 压缩/量化 + GPU 解压：仅在带宽确认是瓶颈后评估
+```
+
+建议新增 `B2-LMC` 系列，不与 A1/A2 主表混表：
+
+| ID | Backend | 关键配置 | 回答的问题 | 表归属 |
+|----|---------|----------|------------|--------|
+| **B2-LMC-base** | LMCache CPU | `local_cpu=true`，`chunk_size=256` | LMCache 在 S1/CA2 是否能稳定复用 KV？ | Appendix |
+| **B2-LMC-async** | LMCache CPU | `enable_async_loading=true` | lookup/retrieve 是否能和 scheduler/compute 重叠？ | Appendix |
+| **B2-LMC-layerwise** | LMCache CPU | `enable_async_loading=true`，`use_layerwise=true` | 逐层 reload 是否降低 TTFT / task swap latency？ | Appendix / v2 |
+| **B2-LMC-threshold** | LMCache CPU | 扫 `min_retrieve_tokens={0,256,512,1024,2048}` | 小命中 retrieve vs recompute 的拐点在哪？ | Appendix / v2 |
+
+LMCache 配置模板：
+
+```yaml
+# lmcache_config.yaml
+chunk_size: 256
+local_cpu: true
+max_local_cpu_size: 100
+enable_async_loading: true
+min_retrieve_tokens: 1024
+use_layerwise: true
+```
+
+启动模板：
+
+```bash
+LMCACHE_CONFIG_FILE=lmcache_config.yaml \
+CUDA_VISIBLE_DEVICES=0 \
+vllm serve /data1/models/Qwen/Qwen3-4B-Instruct-2507 \
+  --enable-prefix-caching \
+  --max-model-len 65536 \
+  --gpu-memory-utilization 0.92 \
+  --max-num-seqs 2 \
+  --max-num-batched-tokens 8192 \
+  --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'
+```
+
+观测重点：
+
+| 机制 | 必看指标 | 判读 |
+|------|----------|------|
+| base | TTFT(T2) vs TTFT(T0)，external prefix hit，LMCache hit tokens | 先证明 LMCache 路径命中且复用 |
+| async loading | scheduler stall、TTFT、request wait 状态、LMCache async lookup/retrieve 日志 | miss 不应拖慢；hit retrieve 应提前发起 |
+| layerwise | TTFT、nsys layer timeline、H2D 与 layer compute overlap | 目标不是 H2D 绝对更快，而是 load 被 compute 隐藏 |
+| threshold | 不同 `min_retrieve_tokens` 下 TTFT / prefill tokens / H2D bytes | 找到 `T_load < T_recompute` 的最小命中长度 |
+
+小命中判断公式：
+
+```text
+T_load = T_fixed + KV_bytes / BW_eff + T_deserialize
+T_recompute = N_tokens * T_prefill_per_token
+
+load 仅在 T_load < T_recompute 时有意义。
+```
+
+对当前 3090 单机环境，先跑 CPU LMCache；NIXL / P2P 需要另起多实例或多机环境，不阻塞本机 CA2 主线。
 
 ---
 
@@ -355,6 +427,7 @@ Day3  T2/T3 或 T5（S2 共享 64K system prompt）+ PCIe/nsys
 | **A1** | Simple offload | `VLLM_USE_SIMPLE_KV_OFFLOAD=1` + `--kv-offloading-size N` |
 | **A2** | Native offload | 仅 `--kv-offloading-size N` |
 | **B1** | Lazy store | A1 + `lazy_offload=true` |
+| **B2-LMC** | LMCache offload/reuse | `LMCacheConnectorV1` + `LMCACHE_CONFIG_FILE`；async/layerwise/threshold 作为子轴 |
 
 ---
 
@@ -597,3 +670,77 @@ Day5  B-L1 PoC 对照 + 汇总
 5. **只有单侧 bytes** → 不能回答完整 swap cycle；仍不能进主表。
 6. **把 `1024` 写死成 B-L3 定义** → 必须先做 SE1，得到 `sat-BS large-block baseline`。
 7. **Layer 0 与 Mainline 混表** → 64K S1 与 100K CA2 长度不同，不可直接比 TTFT。
+
+
+
+这是一个非常好的理论推演问题。你实际上在问：**如果只卸载部分层的KV Cache（例如每隔M层卸载一层），能否通过预取来隐藏传输延迟？**
+
+理论上，**可以**，但需要满足一个条件：预取窗口足够大，使得传输时间被前面若干层的计算时间完全覆盖。下面我基于你给出的LLaMA-70B数据，来反推最小的“卸载间隔”。
+
+## 📐 已知数据（你提供的）
+
+- 总KV Cache大小（长度32k） ≈ **1.3 GB**（所有80层之和）
+- 单token总计算时间 ≈ **50 ms**（80层）
+- PCIe带宽 ≈ 假设 **16 GB/s**（PCIe 3.0 x16）
+
+由此可算出：
+
+- 每层计算时间 = 50 ms / 80 ≈ **0.625 ms**
+- 单层KV大小 = 1.3 GB / 80 ≈ **16.25 MB**
+- 单层KV传输时间 = 16.25 MB / 16 GB/s ≈ **1.02 ms**
+
+## 🧮 理论计算：最小卸载间隔M
+
+假设我们**每隔M层**卸载其中一层的KV Cache（即该层的KV存放在CPU内存），其余M-1层的KV保留在GPU。  
+计算到被卸载的那一层时，需要从CPU加载该层的完整KV。如果我们在计算前面M-1层时，**异步预取**后面那个卸载层的KV，那么要完全掩盖传输时间，需要：
+
+\[
+(M - 1) \times t_{\text{layer\_compute}} \ge t_{\text{transfer}}
+\]
+
+代入数值：
+
+\[
+(M - 1) \times 0.625 \text{ ms} \ge 1.02 \text{ ms}
+\]
+
+\[
+M - 1 \ge \frac{1.02}{0.625} \approx 1.63
+\]
+
+\[
+M \ge 2.63 \quad \Rightarrow \quad M_{\min} = 3
+\]
+
+### 结论（基于你给的数据）
+**每隔3层卸载1层的KV Cache（即每3层中只有1层的KV在CPU，另外2层在GPU），就可以用前面2层的计算时间完全掩盖加载这1层KV的传输时间。**
+
+## ⚠️ 但是，这个结论在实际中几乎不成立
+
+原因有三点，非常关键：
+
+### 1. **你给的1.3GB总KV明显偏小**
+真实LLaMA-70B使用**Grouped Query Attention (GQA)**，KV heads通常为8（而不是64个注意力头）。正确估算（长度32k，精度fp16）：
+- 每层KV大小 ≈ 2 × 8 (KV heads) × 128 (head_dim) × 32768 (seq_len) × 2 bytes ≈ **134 MB**
+- 80层总和 ≈ **10.7 GB**（而不是1.3 GB）
+
+按真实数据重新算：
+- 单层传输时间 ≈ 134 MB / 16 GB/s ≈ **8.4 ms**
+- 需要 (M-1)×0.625 ≥ 8.4 → M-1 ≥ 13.44 → **M ≥ 15**
+- 即需要每隔15层才卸载1层。这意味着**GPU中至少保留14/15的层**，显存节省极其有限（只省了6.7%的KV显存），没有实际意义。
+
+### 2. **KV Cache的访问模式是“每层必须、每个token必须”**
+即使你只卸载了1/3的层，每生成一个新token，你**依然要读取所有被卸载层的全部历史KV**。在长序列下，这个读取操作会**每token都触发**，成为稳定且不可消除的带宽消耗。而权重的卸载可以做到“每N个token才传输一次”（因为权重固定，可以复用），KV不行。
+
+### 3. **预取无法真正掩盖**
+权重预取之所以有效，是因为计算层i时，可以提前加载层i+N的权重，而**层i+N的计算还远在N步之后**。但KV预取时，你需要的正是**当前层**的KV。即便你提前M层开始预取，当你计算到那一层时，预取必须已经完成。由于每个token都会触发所有卸载层的KV读取，预取窗口实际上被**序列长度方向**上的token生成给打乱了——每一层KV在每个token都要重新读一遍，无法像权重那样“一次加载，多次使用”。
+
+## 💎 最终结论
+
+| 场景 | 是否可通过“隔层卸载”掩盖延迟？ |
+|------|-------------------------------|
+| **权重** | ✅ 是，且效果显著（Select-N） |
+| **KV Cache**（理论基于你的1.3GB假设） | ⚠️ 数学上可行，但参数假设错误 |
+| **KV Cache**（真实LLaMA-70B数据） | ❌ 否，需要的卸载间隔过大（M≥15），显存收益极低，且每token传输开销依然存在 |
+
+**一句话**：在真实模型和真实带宽下，**不要试图通过隔层卸载KV Cache来隐藏延迟**——收益远小于代价。正确的做法是：将KV Cache全部留在GPU（或使用更快的互连如NVLink），或者接受完全卸载带来的延迟损失（如用于离线批处理）。

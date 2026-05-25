@@ -16,6 +16,7 @@
 ## 文件
 
 - `benchmark_a_vs_c.py`: 独立 bench
+- `benchmark_multigpu_batch_lock.py`: 多 GPU 并发 `contiguous` vs `batched`，看 `cuMemcpyBatchAsync` 提交/完成是否有锁冲突
 - `run_with_pcie_monitor.sh`: bench + `nvidia-smi dmon` 封装
 - `summarize_pcie_csv.py`: 汇总 `dmon` 的 PCIe Rx/Tx
 - `run_common_models.sh`: 跑一组常见开源模型 preset
@@ -39,6 +40,61 @@ source .venv/bin/activate
 
 ```bash
 .venv/bin/python benchmarks/kv_offload_layout/benchmark_a_vs_c.py
+```
+
+多 GPU 并发 lock-contention bench：
+
+```bash
+.venv/bin/python benchmarks/kv_offload_layout/benchmark_multigpu_batch_lock.py \
+  --gpus 0,1 \
+  --direction h2d \
+  --mode both \
+  --execution-model thread \
+  --run-mode both \
+  --num-layers 36 \
+  --num-blocks 256 \
+  --bytes-per-block 65536 \
+  --repeat 20 \
+  --output benchmarks/kv_offload_layout/results/multigpu_h2d_2gpu.json
+```
+
+同一口径切到多进程：
+
+```bash
+.venv/bin/python benchmarks/kv_offload_layout/benchmark_multigpu_batch_lock.py \
+  --gpus 0,1 \
+  --direction h2d \
+  --mode both \
+  --execution-model process \
+  --run-mode concurrent-only \
+  --num-layers 36 \
+  --num-blocks 256 \
+  --bytes-per-block 65536 \
+  --repeat 20 \
+  --output benchmarks/kv_offload_layout/results/multigpu_h2d_2gpu_process.json
+```
+
+用 Nsight Systems 观测当前多 GPU microbench：
+
+```bash
+bash benchmarks/kv_offload_layout/run_multigpu_with_nsys.sh \
+  benchmarks/kv_offload_layout/results/nsys \
+  --gpus 0,1,2,3 \
+  --direction both \
+  --mode both \
+  --execution-model thread \
+  --run-mode concurrent-only \
+  --num-layers 1 \
+  --num-blocks 256 \
+  --bytes-per-block 65536 \
+  --repeat 20 \
+  --output benchmarks/kv_offload_layout/results/multigpu_4gpu_thread_concurrent.json
+```
+
+切到多进程只改：
+
+```bash
+  --execution-model process
 ```
 
 带 PCIe 监控一起跑：
@@ -143,6 +199,65 @@ bash benchmarks/kv_offload_layout/run_physical_block_sweep.sh
 - `avg_rx_mib_s` / `avg_tx_mib_s`
 - `peak_rx_mib_s` / `peak_tx_mib_s`
 
+## 多 GPU lock-contention bench 输出
+
+`benchmark_multigpu_batch_lock.py` 每个组合会先跑：
+
+- `baseline_1gpu`: 只用 `--gpus` 里的第一张卡
+- `concurrent_ngpu`: 所有指定 GPU 同时起跑
+
+字段：
+
+- `submit_us_p50/p95`: host 侧提交一次 copy 的耗时
+- `complete_us_p50/p95`: 从提交开始到 stream 完成的总耗时
+- `gbps_p50/p95`: 有效带宽
+- `speedup_vs_1gpu`: `concurrent_ngpu.aggregate.gbps_p50 / baseline_1gpu.aggregate.gbps_p50`
+- `scaling_efficiency`: `speedup_vs_1gpu / num_gpus`
+- `execution_model`: `thread` 或 `process`
+- `run_mode`: `baseline-only` / `concurrent-only` / `both`
+
+设计口径：
+
+- 单进程
+- 每 GPU 一个线程
+- 每轮用 barrier 同步起跑
+- 第一版只测 `H2D` / `D2H`
+- 第一版不测 `G2G`
+
+现在已支持两种并发模型：
+
+- `thread`: `1 process / N threads / N GPUs`
+- `process`: `N processes / 1 GPU each`
+
+建议口径：
+
+- `baseline-only`: 只补一次 1GPU baseline
+- `concurrent-only`: 只跑 `N GPU` 同时起跑，适合 `thread vs process` 对照
+- `both`: 一次命令同时产出 baseline + concurrent
+
+## 用 `nsys` 看什么
+
+对这个 microbench，`nsys` 主要回答两类问题：
+
+1. **submit 路径是否被串行化**
+   - 看 host 侧 CUDA API 时间线
+   - 对比 `thread` vs `process`
+   - 若 `thread` 下多 GPU 的 API 调用明显排队，而 `process` 下缓解，说明 submission-side contention 存在
+
+2. **copy 执行本体是否仍被共享链路限制**
+   - 看各 GPU 的 memcpy 时间线是否高度重叠
+   - 看整体 CUDA memcpy 持续时间是否与 aggregate `gbps` 结论一致
+   - 若 `process` 只改善 submit，不明显改善 memcpy 完成跨度，说明主瓶颈仍是平台级 copy ceiling
+
+建议先抓：
+
+- `run-mode=concurrent-only`
+- 同一组参数分别跑：
+  - `execution-model=thread`
+  - `execution-model=process`
+
+这样 trace 最干净，最容易对照。
+
 ## 解释
 
 看两件事：
@@ -235,6 +350,155 @@ bash benchmarks/kv_offload_layout/run_physical_block_sweep.sh
 - 把 **physical block** 从 `64 KiB` 拉大到 `0.5~2 MiB`，`C` 的 memcpy 本体性能会迅速逼近 `A`
 - 这和 blog 里结论一致：DMA 更喜欢 **大且连续** 的 copy
 - 因此，若能把当前 `layer x block` 碎片化搬运重组为 `0.5~2 MiB` 级别 physical block，单看 memcpy 本体，收益非常实在
+
+### 5. Multi-GPU concurrent copy probe (`cuMemcpyBatchAsync` lock question)
+
+新增多 GPU microbench：
+
+- `benchmark_multigpu_batch_lock.py`
+- 口径：**单进程 + 每 GPU 一个线程 + barrier 同步起跑**
+- 第一阶段只测：
+  - `H2D` / `D2H`
+  - `contiguous` (`cudaMemcpyAsync`)
+  - `batched` (`cuMemcpyBatchAsync`)
+
+#### 5.1 关注问题
+
+要回答的不是单卡 layout 收益，而是：
+
+- 多 GPU 并发时，`cuMemcpyBatchAsync` 是否存在明显的 driver-side lock / serialization
+- 若多卡不扩展，主因更像：
+  - `cuMemcpyBatchAsync` 提交路径锁
+  - 还是共享的 host<->device copy 通道 / PCIe / root complex ceiling
+
+#### 5.2 当前观测（GPU 组：`0,1,2,3`）
+
+已测 3 档总量，`bytes_per_block` 固定 `64 KiB`：
+
+| 形态 | 参数 | 每卡总量 | 结论 |
+|---|---|---:|---|
+| CA-like large | `36 layers × 256 blocks × 64 KiB` | `576 MiB` | 4 卡 aggregate 几乎等于单卡 aggregate |
+| reduced bytes | `36 layers × 28 blocks × 64 KiB` | `~63 MiB` | 4 卡 aggregate 仍几乎等于单卡 aggregate |
+| tiny bytes | `1 layer × 256 blocks × 64 KiB` | `16 MiB` | 4 卡 aggregate 仍几乎等于单卡 aggregate |
+
+典型现象：
+
+- `contiguous` 单卡：
+  - `H2D ~= 11.4~11.5 GB/s`
+  - `D2H ~= 12.2~12.3 GB/s`
+- `contiguous` 4 卡 aggregate：
+  - 仍约 `11.5 GB/s` / `12.2 GB/s`
+- 因此 4 卡每卡只分到约 `1/4`：
+  - `H2D ~= 2.88~2.90 GB/s / GPU`
+  - `D2H ~= 3.06~3.08 GB/s / GPU`
+
+`batched` 也类似：
+
+- 单卡 aggregate 低于 `contiguous`
+- 4 卡 aggregate 也仍被钉在接近单卡 aggregate 的水平
+- `submit_us` 随并发增加而上升，但 `complete_us` 仍占主导
+
+#### 5.3 当前解读
+
+这几组结果更支持：
+
+- **多 GPU 不扩展是真现象**
+- 但主因**不像** `cuMemcpyBatchAsync` 独有 driver lock
+- 更像 **共享 host<->device copy 通道总预算固定**
+  - PCIe / root complex / host memory DMA path ceiling
+
+原因：
+
+1. `contiguous` 和 `batched` 都不扩展  
+   若主因是 `cuMemcpyBatchAsync` 锁，`contiguous` 不该同样塌到单卡 aggregate。
+
+2. 每卡带宽近似严格 `1/N` 平分  
+   这更像共享总池子被均匀切分，不像某个线程/某张卡被锁异常拖慢。
+
+3. `batched` 的 `submit_us` 虽然更高，但不是总完成时间主导项  
+   说明 submission contention 存在痕迹，但不是当前 scaling collapse 的第一矛盾。
+
+#### 5.4 当前结论
+
+截至这轮实验，可以先下一个保守结论：
+
+- **当前证据不支持“多卡不扩展主要由 `cuMemcpyBatchAsync` driver lock 导致”**
+- 更强的解释是：
+  - **平台级 host<->device aggregate copy ceiling** 先出现
+- `cuMemcpyBatchAsync` 主要额外损失体现在：
+  - 单卡 `A vs C` 差距
+  - 更高的 `submit_us`
+  - 但它不是 4 卡 aggregate 不扩展的主因
+
+#### 5.5 thread vs process 对照
+
+新增 `execution_model` 对照后，`0,1,2,3` 这组在 `64 KiB/block`、每卡 `16 MiB` 下可观察到：
+
+- `thread -> process` 后，`submit_us` 明显下降
+  - `contiguous` 最明显，常从 `~30-40 us` 回到 `~5-15 us`
+  - `batched` 也下降，常从 `~300-500 us` 回到 `~230-290 us`
+- 但 `complete_us` 与 aggregate `gbps` 变化很小
+  - `contiguous` aggregate 几乎不变
+  - `batched` aggregate 只小幅改善
+
+这说明：
+
+- **单进程多线程路径确实存在 submission-side contention**
+- 但 **它不是 4 卡 aggregate 不扩展的主因**
+- 主导瓶颈仍更像 **平台级 host<->device aggregate copy ceiling**
+
+因此当前最稳的判断是：
+
+- 有锁痕迹，但不是主犯
+- `process` 模式适合作为证据对照
+- 若要继续深挖根因，优先做 `nsys` 观测，再看是否需要 GPU 拓扑对照
+
+#### 5.6 nsys 观察
+
+对同一组 `concurrent-only` 参数分别抓 `thread` / `process` trace 后，`nsys stats` 给出的定量信息与上面的 microbench 结论一致：
+
+- 两个 trace 的 workload 基本一致
+  - `H2D`: `200` 次 copy，总量约 `3355 MB`
+  - `D2H`: `216` 次 copy，总量约 `3624 MB`
+  - 单次 copy 大小基本固定在 `16.777 MB`
+
+- `process` 模式下，host 侧提交成本确实下降
+  - `cuMemcpyBatchAsync`
+    - `thread`: total `70.4 ms`，avg `352 us`
+    - `process`: total `49.9 ms`，avg `250 us`
+  - `cudaMemcpyAsync`
+    - `thread`: total `195.3 ms`，avg `872 us`
+    - `process`: total `182.1 ms`，avg `813 us`
+
+- 但 GPU 上真实 memcpy 执行时间只小幅改善
+  - `H2D` GPU mem time
+    - `thread`: `989 ms`
+    - `process`: `917 ms`
+  - `D2H` GPU mem time
+    - `thread`: `1146 ms`
+    - `process`: `1049 ms`
+
+这说明：
+
+- **单进程多线程路径存在 submission-side contention**
+- 但 **真实 memcpy 执行跨度没有随之大幅缩短**
+- 所以当前主瓶颈仍更像 **平台级 host<->device aggregate copy ceiling**
+
+另外，`process` trace 里 `cudaHostAlloc`、`cudaMalloc`、`cudaStreamCreateWithPriority`、`cuLibraryLoadData` 更重，主要是因为 `4` 个进程各自初始化一套 CUDA runtime / stream / alloc 路径，不应把这部分误判成 steady-state copy 退化。
+
+#### 5.7 下一步
+
+若还要继续追 `driver lock`，比继续降 payload 更值钱的是：
+
+1. **换 GPU 拓扑组合**
+   - 如 `0,1` / `0,4` / `0,1,2,3` / `4,5,6,7`
+   - 看 aggregate ceiling 是否随 GPU 组合变化
+
+2. **对比 thread vs process**
+   - `thread`: `1 process / N threads / N GPUs`
+   - `process`: `N processes / 1 GPU each`
+   - 若 `process` 显著更好，才更像进程内 driver/runtime lock
+   - 若两者都一样差，更像平台共享通道问题
 
 
 你这个观察和总结非常精准，直接点出了底层高性能存储和内存拷贝的核心痛点：**平摊开销（Amortized Overhead）**。

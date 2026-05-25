@@ -60,7 +60,6 @@ with urllib.request.urlopen(req, timeout=3600) as resp:
         if line.startswith("data:") and line[5:].strip() != "[DONE]":
             if ttft is None:
                 ttft = (time.perf_counter() - t0) * 1000
-            break
 total = (time.perf_counter() - t0) * 1000
 result = {"mean_ttft_ms": ttft or total, "total_ms": total, "label": out_path}
 open(out_path, "w").write(json.dumps(result, indent=2))

@@ -43,7 +43,7 @@ for i in $(seq 1 $((SERVER_WAIT_S / 3))); do
     echo "[launch] server ready after ${i}x3s"
     break
   fi
-  if grep -qE "ValueError|EngineCore failed|RuntimeError: Engine core" "$OUTDIR/server.log" 2>/dev/null; then
+  if grep -qE "ValueError|ImportError|ModuleNotFoundError|EngineCore failed|RuntimeError: Engine core|cannot open shared object file|Traceback \\(most recent call last\\)" "$OUTDIR/server.log" 2>/dev/null; then
     echo "[launch] server failed:" >&2
     tail -20 "$OUTDIR/server.log" >&2
     exit 1

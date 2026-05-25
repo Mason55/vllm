@@ -1,0 +1,30 @@
+[h2d][contiguous] exec=thread run=concurrent-only pattern=contiguous gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5464.28 aggregate_gbps_p50=11.44
+  gpu=0 submit_us_p50=50.47 submit_us_p95=66.89 complete_us_p50=5411.36 gbps_p50=2.89
+  gpu=1 submit_us_p50=47.87 submit_us_p95=57.26 complete_us_p50=5416.09 gbps_p50=2.88
+  gpu=2 submit_us_p50=48.70 submit_us_p95=59.97 complete_us_p50=5411.55 gbps_p50=2.89
+  gpu=3 submit_us_p50=47.61 submit_us_p95=62.47 complete_us_p50=5411.41 gbps_p50=2.89
+[h2d][batched] exec=thread run=concurrent-only pattern=random gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5827.56 aggregate_gbps_p50=10.72
+  gpu=0 submit_us_p50=425.05 submit_us_p95=448.11 complete_us_p50=5639.16 gbps_p50=2.77
+  gpu=1 submit_us_p50=405.27 submit_us_p95=431.43 complete_us_p50=5660.45 gbps_p50=2.76
+  gpu=2 submit_us_p50=401.86 submit_us_p95=412.48 complete_us_p50=5663.17 gbps_p50=2.76
+  gpu=3 submit_us_p50=424.71 submit_us_p95=444.53 complete_us_p50=5649.71 gbps_p50=2.77
+[d2h][contiguous] exec=thread run=concurrent-only pattern=contiguous gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5131.02 aggregate_gbps_p50=12.18
+  gpu=0 submit_us_p50=37.19 submit_us_p95=49.89 complete_us_p50=5084.77 gbps_p50=3.07
+  gpu=1 submit_us_p50=36.59 submit_us_p95=48.60 complete_us_p50=5086.79 gbps_p50=3.07
+  gpu=2 submit_us_p50=36.36 submit_us_p95=49.43 complete_us_p50=5083.57 gbps_p50=3.07
+  gpu=3 submit_us_p50=31.18 submit_us_p95=50.31 complete_us_p50=5083.34 gbps_p50=3.07
+[d2h][batched] exec=thread run=concurrent-only pattern=random gpus=[0, 1, 2, 3] total_bytes=64.00 MiB
+concurrent_ngpu: gpus=[0, 1, 2, 3] total_bytes=67108864 aggregate_complete_us_p50=5535.86 aggregate_gbps_p50=11.29
+  gpu=0 submit_us_p50=486.93 submit_us_p95=519.14 complete_us_p50=5288.71 gbps_p50=2.95
+  gpu=1 submit_us_p50=467.97 submit_us_p95=525.30 complete_us_p50=5316.43 gbps_p50=2.94
+  gpu=2 submit_us_p50=442.66 submit_us_p95=516.13 complete_us_p50=5295.65 gbps_p50=2.95
+  gpu=3 submit_us_p50=482.96 submit_us_p95=519.54 complete_us_p50=5284.54 gbps_p50=2.96
+json=benchmarks/kv_offload_layout/results/multigpu_4gpu_thread_concurrent.json
+Collecting data...
+Generating '/tmp/nsys-report-7d72.qdstrm'
+[1/1] [0%                          ] multigpu_20260525_150939.nsys-rep[1/1] [0%                          ] multigpu_20260525_150939.nsys-rep[1/1] [5%                          ] multigpu_20260525_150939.nsys-rep[1/1] [6%                          ] multigpu_20260525_150939.nsys-rep[1/1] [7%                          ] multigpu_20260525_150939.nsys-rep[1/1] [=======39%                  ] multigpu_20260525_150939.nsys-rep[1/1] [===========53%              ] multigpu_20260525_150939.nsys-rep[1/1] [========================100%] multigpu_20260525_150939.nsys-rep[1/1] [========================100%] multigpu_20260525_150939.nsys-rep
+Generated:
+	/data1/lmy/vllm/benchmarks/kv_offload_layout/results/nsys/multigpu_20260525_150939.nsys-rep

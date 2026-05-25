@@ -1,0 +1,5 @@
+chunk_size: 256
+local_cpu: true
+max_local_cpu_size: 100
+enable_async_loading: true
+min_retrieve_tokens: 1024

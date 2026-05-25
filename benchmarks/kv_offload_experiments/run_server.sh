@@ -17,6 +17,24 @@ BLOCK_SIZE="${6:-}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 # Always use py312 editable vLLM (0.21.0rc3); system /usr vllm 0.17 breaks SimpleCPUOffload.
 export PATH="/data1/anaconda3/envs/py312/bin:${PATH}"
+PY312_PREFIX="${PY312_PREFIX:-/data1/anaconda3/envs/py312}"
+LD_PATH_ENTRIES=(
+  "${PY312_PREFIX}/lib/python3.12/site-packages/torch/lib"
+  "/usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib"
+  "${PY312_PREFIX}/lib/python3.12/site-packages/nvidia/cuda_runtime/lib"
+  "${PY312_PREFIX}/lib/python3.12/site-packages/nvidia/cublas/lib"
+  "${PY312_PREFIX}/lib/python3.12/site-packages/nvidia/cudnn/lib"
+  "${PY312_PREFIX}/lib/python3.12/site-packages/nvidia/cusparse/lib"
+  "${PY312_PREFIX}/lib/python3.12/site-packages/nvidia/curand/lib"
+  "${PY312_PREFIX}/lib/python3.12/site-packages/nvidia/nccl/lib"
+  "${PY312_PREFIX}/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib"
+  "/usr/local/cuda-12.9/targets/x86_64-linux/lib"
+)
+for path in "${LD_PATH_ENTRIES[@]}"; do
+  if [[ -d "$path" ]]; then
+    export LD_LIBRARY_PATH="${path}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+  fi
+done
 VLLM_BIN="${VLLM_BIN:-/data1/anaconda3/envs/py312/bin/vllm}"
 # Do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True with SimpleCPUOffload
 # (invalidates pinned KV memory; vLLM 0.21 rejects at startup).
@@ -42,7 +60,7 @@ case "$PROFILE" in
     # 0.965 restores enough KV headroom for 104448 on 3090.
     MAX_LEN=104448
     MAX_SEQS=16
-    GPU_UTIL=0.965
+    GPU_UTIL="${GPU_UTIL_OVERRIDE:-0.965}"
     MAX_BATCHED=4096
     KV_GIB="${KV_GIB:-32}"
     ;;
@@ -50,7 +68,7 @@ case "$PROFILE" in
     # B-L3: PA + large block (RFC §4.1.3 control group; isolates block-size win).
     MAX_LEN=104448
     MAX_SEQS=16
-    GPU_UTIL=0.965
+    GPU_UTIL="${GPU_UTIL_OVERRIDE:-0.965}"
     MAX_BATCHED=4096
     KV_GIB="${KV_GIB:-32}"
     BLOCK_SIZE="${BLOCK_SIZE:-1024}"
